@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "..\\.."
+		},
+		{
+			"name": "WLED",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"tuple": "cpp"
+		}
+	}
+}

@@ -2,14 +2,27 @@
 #include "wled.h"
 #include "FX.h"
 
+bool isScannerFinished()
+{
+  WS2812FX::segment& seg = strip.getSegment(0);
+  WS2812FX::segment_runtime segRunt = strip.getSegmentRuntime();
+  uint32_t nowUp = millis(); // Be aware, millis() rolls over every 49 days
+  uint32_t now = nowUp + strip.timebase;
+  uint16_t counter = now * ((seg.speed >> 2) +8);      
+  uint16_t index = counter * seg.virtualLength()  >> 16;
+
+  if (index < seg.length() - 1)
+  {
+    return false;        
+  }
+  return true;
+}
+
 
 long wipeState = 0; //0: inactive 1: wiping 2: solid
 unsigned long timeStaticStart = 0;
-long previousUserVar0 = 0;
+//long previousUserVar0 = 0;
 long briBW = bri; //brightness before wipe
-//comment this out if you want the turn off effect to be just fading out instead of reverse wipe
-//#define STAIRCASE_WIPE_OFF
-
 void startWipe()
 {
   briBW = bri; //turn on
@@ -26,19 +39,31 @@ void startWipe()
   colorUpdated(3);
 }
 
+void startScanner()
+{
+  bri = 255; //turn on
+  transitionDelayTemp = 0; //no transition
+  effectCurrent = FX_MODE_LARSON_SCANNER;
+  resetTimebase(); //make sure wipe starts from beginning
+
+  //set wipe direction
+  WS2812FX::Segment& seg = strip.getSegment(0);
+  bool doReverse = (userVar0 == 4);
+  seg.setOption(1, doReverse);
+
+  colorUpdated(3);
+}
+
 void turnOff()
 {
-  #ifdef STAIRCASE_WIPE_OFF
-  transitionDelayTemp = 0; //turn off immediately after wipe completed
-  #else
   transitionDelayTemp = 4000; //fade out slowly
-  #endif
   bri = briBW;
-  effectCurrent = FX_MODE_STATIC;
-  colorUpdated(3);
+  effectCurrent = FX_MODE_STATIC;  
   wipeState = 0;
   userVar0 = 0;
-  previousUserVar0 = 0;
+  userVar1 = 0;
+  colorUpdated(3);
+  //previousUserVar0 = 0;
 }
 
 //gets called once at boot. Do all initialization that doesn't depend on network here
@@ -61,10 +86,10 @@ void userLoop()
   //has to be set to 2 if movement is detected on the PIR that is the opposite side
   //can be set to 0 if no movement is detected. Otherwise LEDs will turn off after a configurable timeout (userVar1 seconds)
 
-  if (userVar0 > 0)
+  if (userVar0 == 1 || userVar0 == 2)
   {
-    if ((previousUserVar0 == 1 && userVar0 == 2) || (previousUserVar0 == 2 && userVar0 == 1)) wipeState = 3; //turn off if other PIR triggered
-    previousUserVar0 = userVar0;
+    //if ((previousUserVar0 == 1 && userVar0 == 2) || (previousUserVar0 == 2 && userVar0 == 1)) wipeState = 3; //turn off if other PIR triggered
+    //previousUserVar0 = userVar0;
     
     if (wipeState == 0) {
       startWipe();
@@ -83,29 +108,40 @@ void userLoop()
         if (millis() - timeStaticStart > userVar1*1000) wipeState = 3;
       }
     } else if (wipeState == 3) { //switch to wipe off
-      #ifdef STAIRCASE_WIPE_OFF
-      effectCurrent = FX_MODE_COLOR_WIPE;
-      strip.timebase = 360 + (255 - effectSpeed)*75 - millis(); //make sure wipe starts fully lit
-      colorUpdated(3);
-      wipeState = 4;
-      #else
       turnOff();
-      #endif
     } else { //wiping off
       if (millis() + strip.timebase > (725 + (255 - effectSpeed)*150)) turnOff(); //wipe complete
     }
-  } else {
-    wipeState = 0; //reset for next time
-    if (previousUserVar0) {
-      #ifdef STAIRCASE_WIPE_OFF
-      userVar0 = previousUserVar0;
-      wipeState = 3;
-      #else
-      turnOff();
-      #endif
+  } 
+  else if (userVar0 == 3 || userVar0 == 4) 
+  {
+    //previousUserVar0 = 0;
+    if (wipeState == 0) {
+      startScanner();
+      wipeState = 1;
+    } else if (wipeState == 1) { //scanner
+
+      if (isScannerFinished())
+      {            
+        briBW = 0;         
+        wipeState = 3;
+      }
+    } else if (wipeState == 3) {
+      bri = 0;
+      effectCurrent = FX_MODE_STATIC;  
+      wipeState = 0;
+      userVar0 = 0;
+      userVar1 = 0;
+      colorUpdated(3);
     }
-    previousUserVar0 = 0;
-  }
+  } 
+  else if (userVar0 == 0) 
+  {
+    wipeState = 0; //reset for next time
+    //if (previousUserVar0) {
+      //turnOff();
+    //} 
+  }   
 }
 
 
