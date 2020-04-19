@@ -2,9 +2,25 @@
 #include "wled.h"
 #include "FX.h"
 
+
+long wipeState = 0; //0: inactive 1: wiping 2: solid
+long scanState = 0; //0: inactive 1: scanning 2: solid
+unsigned long timeStaticStart = 0;
+uint16_t wipeOffDelay = 0;
+uint16_t scannerSegment = 0;
+long briBW = bri; //brightness before wipe
+bool doWipe = false;
+bool doScan = false;
+bool isScanreverse = false;
+bool isWipeReverse = false;
+
+uint32_t getRandomColor() {
+  return strip.color_wheel(strip.get_random_wheel_index(random8()));
+}
+
 bool isScannerFinished()
 {
-  WS2812FX::segment& seg = strip.getSegment(0);
+  WS2812FX::segment& seg = strip.getSegment(scannerSegment);
   WS2812FX::segment_runtime segRunt = strip.getSegmentRuntime();
   uint32_t nowUp = millis(); // Be aware, millis() rolls over every 49 days
   uint32_t now = nowUp + strip.timebase;
@@ -18,52 +34,51 @@ bool isScannerFinished()
   return true;
 }
 
-
-long wipeState = 0; //0: inactive 1: wiping 2: solid
-unsigned long timeStaticStart = 0;
-//long previousUserVar0 = 0;
-long briBW = bri; //brightness before wipe
 void startWipe()
 {
-  briBW = bri; //turn on
-  bri = 255; //turn on
+  briBW = bri; //turn on  
+  bri=255;  
   transitionDelayTemp = 0; //no transition
   effectCurrent = FX_MODE_COLOR_WIPE;
   resetTimebase(); //make sure wipe starts from beginning
 
   //set wipe direction
-  WS2812FX::Segment& seg = strip.getSegment(0);
-  bool doReverse = (userVar0 == 2);
-  seg.setOption(1, doReverse);
+  WS2812FX::Segment& seg = strip.getSegment(0);  
+  seg.setOption(1, isWipeReverse);
 
   colorUpdated(3);
 }
 
 void startScanner()
-{
-  bri = 255; //turn on
-  transitionDelayTemp = 0; //no transition
-  effectCurrent = FX_MODE_LARSON_SCANNER;
+{   
+  WS2812FX::Segment& seg = strip.getSegment(scannerSegment);   
+  transitionDelayTemp = 3000; //no transition
+  if (scannerSegment > 0)
+  {
+    strip.setMode(scannerSegment, FX_MODE_LARSON_SCANNER);
+  }
+  else
+  {
+    effectCurrent = FX_MODE_LARSON_SCANNER;
+  }
+  
+  //seg.setOption(0,true); //select segment
   resetTimebase(); //make sure wipe starts from beginning
-
-  //set wipe direction
-  WS2812FX::Segment& seg = strip.getSegment(0);
-  bool doReverse = (userVar0 == 4);
-  seg.setOption(1, doReverse);
-
+    
+  seg.setOption(1, isScanreverse);
+  seg.colors[0] = getRandomColor(); //segMain.colors[0];    
+      
   colorUpdated(3);
 }
 
 void turnOff()
 {
-  transitionDelayTemp = 4000; //fade out slowly
+  transitionDelayTemp = 3000; //fade out slowly
   bri = briBW;
   effectCurrent = FX_MODE_STATIC;  
-  wipeState = 0;
-  userVar0 = 0;
-  userVar1 = 0;
-  colorUpdated(3);
-  //previousUserVar0 = 0;
+  wipeState = 0;  
+  doWipe = false;
+  colorUpdated(3);  
 }
 
 //gets called once at boot. Do all initialization that doesn't depend on network here
@@ -78,70 +93,109 @@ void userConnected()
 
 }
 
+void processWipe() {
+  if (!doWipe) 
+  {
+    return;
+  }
+
+  if (wipeState == 0) {
+    startWipe();
+    wipeState = 1;
+  } else if (wipeState == 1) { //wiping
+    uint32_t cycleTime = 360 + (255 - effectSpeed)*75; //this is how long one wipe takes (minus 25 ms to make sure we switch in time)
+    if (millis() + strip.timebase > (cycleTime - 25)) { //wipe complete
+      effectCurrent = FX_MODE_STATIC;
+      timeStaticStart = millis();
+      colorUpdated(3);
+      wipeState = 2;
+    }
+  } else if (wipeState == 2) { //static
+    if (wipeOffDelay > 0) //if U1 is not set, the light will stay on until second PIR or external command is triggered
+    {
+      if (millis() - timeStaticStart > wipeOffDelay*1000) wipeState = 3;
+    }
+    else
+    {
+      wipeState = 3;
+    }    
+  } else if (wipeState == 3) { //switch to wipe off
+    turnOff();
+  }
+}
+  
+void processScan() {
+  if (!doScan)
+  {
+    return;
+  }
+  if (scanState == 0) 
+  {      
+    startScanner();
+    scanState = 1;
+  } else if (scanState == 1) { //scanner
+    if (isScannerFinished())
+    {            
+      scanState = 3;
+    }
+  } else if (scanState == 3) {
+    WS2812FX::Segment& seg = strip.getSegment(scannerSegment);
+    seg.colors[0] = 0;    
+    if (scannerSegment > 0)
+    {
+      strip.setMode(scannerSegment, FX_MODE_STATIC);    
+    }
+    else
+    {
+      effectCurrent = FX_MODE_STATIC;
+    }
+    
+    
+    doScan = false;
+    colorUpdated(3);
+  }
+}
+
+
 //loop. You can use "if (WLED_CONNECTED)" to check for successful connection
 void userLoop()
 {
-  //userVar0 (U0 in HTTP API):
-  //has to be set to 1 if movement is detected on the PIR that is the same side of the staircase as the ESP8266
-  //has to be set to 2 if movement is detected on the PIR that is the opposite side
-  //can be set to 0 if no movement is detected. Otherwise LEDs will turn off after a configurable timeout (userVar1 seconds)
-
   if (userVar0 == 1 || userVar0 == 2)
   {
-    //if ((previousUserVar0 == 1 && userVar0 == 2) || (previousUserVar0 == 2 && userVar0 == 1)) wipeState = 3; //turn off if other PIR triggered
-    //previousUserVar0 = userVar0;
+    doWipe = true;
+    wipeState = 0;
+    wipeOffDelay = userVar1;  
+    isWipeReverse = userVar0 = 2;  
     
-    if (wipeState == 0) {
-      startWipe();
-      wipeState = 1;
-    } else if (wipeState == 1) { //wiping
-      uint32_t cycleTime = 360 + (255 - effectSpeed)*75; //this is how long one wipe takes (minus 25 ms to make sure we switch in time)
-      if (millis() + strip.timebase > (cycleTime - 25)) { //wipe complete
-        effectCurrent = FX_MODE_STATIC;
-        timeStaticStart = millis();
-        colorUpdated(3);
-        wipeState = 2;
-      }
-    } else if (wipeState == 2) { //static
-      if (userVar1 > 0) //if U1 is not set, the light will stay on until second PIR or external command is triggered
-      {
-        if (millis() - timeStaticStart > userVar1*1000) wipeState = 3;
-      }
-    } else if (wipeState == 3) { //switch to wipe off
-      turnOff();
-    } else { //wiping off
-      if (millis() + strip.timebase > (725 + (255 - effectSpeed)*150)) turnOff(); //wipe complete
-    }
   } 
   else if (userVar0 == 3 || userVar0 == 4) 
-  {
-    //previousUserVar0 = 0;
-    if (wipeState == 0) {
-      startScanner();
-      wipeState = 1;
-    } else if (wipeState == 1) { //scanner
-
-      if (isScannerFinished())
-      {            
-        briBW = 0;         
-        wipeState = 3;
-      }
-    } else if (wipeState == 3) {
-      bri = 0;
-      effectCurrent = FX_MODE_STATIC;  
-      wipeState = 0;
-      userVar0 = 0;
-      userVar1 = 0;
-      colorUpdated(3);
-    }
+  {    
+    doScan = true;
+    scanState = 0;
+    scannerSegment = userVar1;   
+    isScanreverse = userVar0 == 4; 
   } 
+  else if (userVar0 == 5)
+  {    
+    WS2812FX::Segment& seg = strip.getSegment(userVar1);
+    transitionDelayTemp = 0;
+    seg.colors[0] = getRandomColor();
+    userVar0 = 0;
+    userVar1 = 0;
+    colorUpdated(3);
+  }
   else if (userVar0 == 0) 
   {
-    wipeState = 0; //reset for next time
-    //if (previousUserVar0) {
-      //turnOff();
-    //} 
-  }   
+    //wipeState = 0; //reset for next time
+    //scanState = 0;    
+  } 
+   
+  userVar0 = 0;
+  userVar1 = 0;    
+
+  processWipe();   
+  processScan();
+  
 }
 
 
