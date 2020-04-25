@@ -13,6 +13,10 @@ bool doWipe = false;
 bool doScan = false;
 bool isScanreverse = false;
 bool isWipeReverse = false;
+long scanNum = 0;
+long scanTotal = 0;
+byte scanPrevColMain[4];
+uint32_t scanPreviousColor = 0;
 
 uint32_t getRandomColor() {
   return strip.color_wheel(strip.get_random_wheel_index(random8()));
@@ -53,22 +57,50 @@ void startScanner()
 {   
   WS2812FX::Segment& seg = strip.getSegment(scannerSegment);   
   transitionDelayTemp = 3000; //no transition
-  if (scannerSegment > 0)
+  if (scannerSegment > 1)
   {
     strip.setMode(scannerSegment, FX_MODE_LARSON_SCANNER);
+    scanPreviousColor = seg.colors[0];
+    seg.colors[1] = scanPreviousColor;
+    seg.colors[0] = getRandomColor();   
   }
   else
-  {
+  {    
+    scanPreviousColor = strip.getColor();
+    strip.setColor(1,scanPreviousColor);
+    strip.setColor(0,getRandomColor());
     effectCurrent = FX_MODE_LARSON_SCANNER;
-  }
+    
+   }
   
   //seg.setOption(0,true); //select segment
   resetTimebase(); //make sure wipe starts from beginning
     
   seg.setOption(1, isScanreverse);
-  seg.colors[0] = getRandomColor(); //segMain.colors[0];    
-      
+  scanNum = 0;    
   colorUpdated(3);
+}
+
+
+void stopScan()
+{
+  WS2812FX::Segment& seg = strip.getSegment(scannerSegment);
+      if (scannerSegment > 1)
+      {
+        seg.colors[0] = scanPreviousColor;
+        seg.colors[1] = 0;          
+        strip.setMode(scannerSegment, FX_MODE_STATIC);    
+      }
+      else
+      {
+        strip.setColor(0,scanPreviousColor);
+        strip.setColor(1,0);
+        effectCurrent = FX_MODE_STATIC;
+      }
+      scanNum = 0;
+      scanTotal = 0;         
+      doScan = false;
+      colorUpdated(3);
 }
 
 void turnOff()
@@ -139,20 +171,17 @@ void processScan() {
       scanState = 3;
     }
   } else if (scanState == 3) {
-    WS2812FX::Segment& seg = strip.getSegment(scannerSegment);
-    seg.colors[0] = 0;    
-    if (scannerSegment > 0)
+
+    if (scanNum < scanTotal)
     {
-      strip.setMode(scannerSegment, FX_MODE_STATIC);    
+      scanNum++;
+      scanState = 1;
+      resetTimebase();
     }
     else
     {
-      effectCurrent = FX_MODE_STATIC;
+      stopScan();      
     }
-    
-    
-    doScan = false;
-    colorUpdated(3);
   }
 }
 
@@ -162,20 +191,27 @@ void userLoop()
 {
   if (userVar0 == 1 || userVar0 == 2)
   {
+    if (doScan)
+    {
+      stopScan();    
+    }
     doWipe = true;
     wipeState = 0;
     wipeOffDelay = userVar1;  
-    isWipeReverse = userVar0 = 2;  
-    
+    isWipeReverse = userVar0 = 2;      
   } 
-  else if (userVar0 == 3 || userVar0 == 4) 
+  else if (userVar0 >= 3 && userVar0 <= 6) 
   {    
-    doScan = true;
-    scanState = 0;
-    scannerSegment = userVar1;   
-    isScanreverse = userVar0 == 4; 
-  } 
-  else if (userVar0 == 5)
+    if (!doWipe && !doScan)
+    {
+      doScan = true;
+      scanState = 0;
+      scanTotal = userVar0 >= 5 ? 1 : 0;    
+      scannerSegment = userVar1;   
+      isScanreverse = userVar0 == 4 || userVar0 == 6; 
+    }
+  }   
+  else if (userVar0 == 7)
   {    
     WS2812FX::Segment& seg = strip.getSegment(userVar1);
     transitionDelayTemp = 0;
